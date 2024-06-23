@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <SDL.h>
+#include "stack.h"
 
 #define RAM_SIZE 4096
 #define WINDOW_WIDTH 640
@@ -54,7 +55,7 @@ uint8_t chip8_fontset[80] =
 uint8_t delay_timer;
 uint8_t sound_timer;
 
-uint16_t stack[STACK_SIZE];
+Stack stack;
 uint16_t sp;
 
 uint8_t keypad[KEYPAD_SIZE];	
@@ -76,24 +77,24 @@ int main(int argc, char **argv)
     SDL_PollEvent(&windowEvent);
     // float dtime = DELTA_TIME_MILIS;
     SDL_SetWindowTitle(win, title);
-    int32_t delay=100;
-    if (!loadRom("../IBM Logo.ch8")){
+    uint32_t frameTimeMilis = 17;
+
+    if (argc < 2) {
         CleanUp_SDL();
         return 1;
     }
+
+    if (!loadRom(argv[1])){
+        CleanUp_SDL();
+        return 1;
+    }
+
     while (!quit){
         handleInput();
         fetchExecute();
         draw();
 
-        if(delay<0)
-		{
-			delay = 0;
-		}
-		else
-		{
-			SDL_Delay(delay);
-		}
+		SDL_Delay(frameTimeMilis);
 		if (delay_timer > 0) --delay_timer;
     }
 
@@ -110,7 +111,7 @@ void init()
 	PC = 0x200;
 	I = 0;
 	sp = 0;
-	memset(stack,0,STACK_SIZE);
+    initStack(&stack, STACK_SIZE, sizeof(PC));
 	memset(memory,0,RAM_SIZE);
 	memset(v,0,V_REG_COUNT);
 	memset(gfx,0,DISPLAY_HEIGHT*DISPLAY_WIDTH);
@@ -176,23 +177,13 @@ void fetchExecute(){
             for (int j = 0; j < 8; j++) {
                 if (((spriteData << j) & 0x80)) { // if sprite pixel on
                     if (gfx[cx + j][cy + i]) { // if screen pixel on
-                        // gfx[cx + j][cy + i] = 0;
                         ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 0;
                         VF = 1;
                     } else { // if screen pixel is off
-                        // gfx[cx + j][cy + i] = 1;
                         ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 1;
                     }
 
                 } 
-                // else { // if sprite pixel off
-                //     if ((gfx[cx + j][cy + i] << j) & 0x80) { // if screen pixel on
-                //         gfx[cx + j][cy + i] = 0;
-                //         VF = 1;
-                //     } else { // if screen pixel is off
-                //         gfx[cx + j][cy + i] = 1;
-                //     }
-                // }
                 if ((cx + j) > DISPLAY_WIDTH) {
                 break;
             }
