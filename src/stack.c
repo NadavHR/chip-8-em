@@ -26,21 +26,21 @@ bool isEmpty(const Stack stack) {
 }
 
 bool isFull(const Stack stack) {
-    return (stack.top == (stack.stackMaxCount - 1));
+    return (stack.top >= (signed int)(stack.stackMaxCount - 1));
 }
 
 void * peek(const Stack stack) {
     if (isEmpty(stack)){
         return NULL;
     }
-    return (void *)((long)stack.buffer + (stack.memberSize * stack.top));
+    return (void *)((unsigned long)stack.buffer + (stack.memberSize * stack.top));
 }
 
 void * pop( Stack * pstack) {
     if (isEmpty(*pstack)){
         return NULL;
     }
-    void * value = (void *)((long)pstack->buffer + (pstack->memberSize * pstack->top));
+    void * value = (void *)((intptr_t)pstack->buffer + (pstack->memberSize * pstack->top));
     pstack->top--;
     return value;
 }
@@ -50,9 +50,9 @@ bool push(Stack * pstack, const void * pvalue ) {
         return false;
     }
     pstack->top++;
-    char * current = (char *)((long)pstack->buffer + (pstack->memberSize * pstack->top));
+    char * current = (char *)((intptr_t)pstack->buffer + (pstack->memberSize * pstack->top));
     for (int i = 0; i < pstack->memberSize; i++) {
-        current[i] = ((char *)pvalue)[i];
+        current[i] = *((char *)((intptr_t)pvalue+i));
     }
     return true;
 }

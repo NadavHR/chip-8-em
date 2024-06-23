@@ -3,7 +3,10 @@
 #include <SDL.h>
 #include "stack.h"
 
+#define USE_SUPER_CHIP_QUIRKS
 #define RAM_SIZE 4096
+#define TIMERS_RATE 60.0
+#define FRAME_RATE 120.0
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 320
 #define DISPLAY_WIDTH 64
@@ -62,14 +65,13 @@ uint8_t keypad[KEYPAD_SIZE];
 	
 uint_fast8_t drawflag;
 
-// #define DELTA_TIME_MILIS ((float)(SDL_GetTicks() - start))
-// unsigned int startTime;
 SDL_Event windowEvent;
 SDL_Window *win;
 SDL_Renderer *renderer;
 
 int main(int argc, char **argv)
 {
+    
     char * title = "CHIP-8";
     init();
     SDL_SetWindowTitle(win, (char(*)) & title);
@@ -77,7 +79,8 @@ int main(int argc, char **argv)
     SDL_PollEvent(&windowEvent);
     // float dtime = DELTA_TIME_MILIS;
     SDL_SetWindowTitle(win, title);
-    uint32_t frameTimeMilis = 17;
+    float frameTimeMilis = 1000.0 / FRAME_RATE;
+    float timersCycleTimeMilis =  1000 / TIMERS_RATE;
 
     if (argc < 2) {
         CleanUp_SDL();
@@ -88,14 +91,28 @@ int main(int argc, char **argv)
         CleanUp_SDL();
         return 1;
     }
-
+    unsigned int startTimeTimers = SDL_GetTicks();
+    unsigned int startTimeFrames = SDL_GetTicks();
     while (!quit){
-        handleInput();
-        fetchExecute();
-        draw();
+        unsigned int deltaTimeTimers = (SDL_GetTicks() - startTimeTimers);
+        unsigned int deltaTimeFrames = SDL_GetTicks() - startTimeFrames;
+        if ((float)deltaTimeFrames >= frameTimeMilis) {
+            handleInput();
+            fetchExecute();
+            draw();
+            startTimeFrames = SDL_GetTicks();
+        }
 
-		SDL_Delay(frameTimeMilis);
-		if (delay_timer > 0) --delay_timer;
+        if ((float)deltaTimeTimers >= timersCycleTimeMilis){
+            if (delay_timer > 0) {
+                delay_timer--;
+            }
+            if (sound_timer > 0) {
+                sound_timer--;
+            }
+            startTimeTimers = SDL_GetTicks();
+        }
+		
     }
 
     CleanUp_SDL();
@@ -105,13 +122,14 @@ int main(int argc, char **argv)
 //Initialize everything
 void init()
 {
+    srand(SDL_GetTicks());
     delay_timer = 0;
 	sound_timer = 0;
 	opcode = 0;
 	PC = 0x200;
 	I = 0;
 	sp = 0;
-    initStack(&stack, STACK_SIZE, sizeof(PC));
+    initStack(&stack, STACK_SIZE, sizeof(uint16_t));
 	memset(memory,0,RAM_SIZE);
 	memset(v,0,V_REG_COUNT);
 	memset(gfx,0,DISPLAY_HEIGHT*DISPLAY_WIDTH);
@@ -142,58 +160,297 @@ void fetchExecute(){
     // execute
     switch ((opcode & 0xF000) >> 12){
 
-        // 00E0 clear screen
+        
         case 0x0000:
-        memset(gfx,0,DISPLAY_HEIGHT*DISPLAY_WIDTH);
-        break;
+            switch (nn)
+            {
+            // 00E0 clear screen
+            case  0xE0:
+                memset(gfx,0,DISPLAY_HEIGHT*DISPLAY_WIDTH);
+                break;
+            
+            // 00EE return from call
+            case 0xEE:
+                PC = *((uint16_t *)pop(&stack));
+                break;
+            }
+            break;
 
         // 1NNN jump
         case 0x1:
-        PC = nnn;
-        break;
+            PC = nnn;
+            break;
+        
+        // 2NNN call
+        case 0x2:
+            if (push(&stack, &PC)){
+                PC = nnn;
+            } else {
+                printf("stack overflow");
+                quit = true;
+                return;
+            }
+            break;
+
+        // 3XNN skip if vx == nn
+        case 0x3:
+            if (v[x] == nn) {
+                PC += 2;
+            }
+            break;
+        
+        // 4XNN skip if vx != nn
+        case 0x4:
+            if (v[x] != nn) {
+                PC += 2;
+            }
+            break;
+        
+        // 5XY0 skip if vx == vy
+        case 0x5:
+            if (v[x] == v[y]) {
+                PC += 2;
+            }
+            break;
 
         // 6XNN set vx register
         case 0x6:
-        v[x] = nn;
-        break;
+            v[x] = nn;
+            break;
 
-        // 7XNN add to vx register
+        // 7XNN add to vx register no carry
         case 0x7:
-        v[x] += nn;
-        break;
+            v[x] += nn;
+            break;
+
+        case 0x8:
+            switch (n) {
+                // 8XY0 set vx to vy
+                case 0x0:
+                    v[x] = v[y];
+                    break;
+
+                // 8XY1 set vx to binary vx or vy
+                case 0x1:
+                    v[x] = (v[x] | v[y]);
+                    break;
+                
+                // 8XY2 set vx to binary vx or vy
+                case 0x2:
+                    v[x] = (v[x] & v[y]);
+                    break;
+
+                // 8XY3 set vx to binary vx xor vy
+                case 0x3:
+                    v[x] = (v[x] ^ v[y]);
+                    break;
+
+                // 8XY4 add vy to vx with carry
+                case 0x4:
+                    if (v[x] > 0 && v[y] > 0xFF - v[x]) {
+                        VF = 1;
+                    } else {
+                        VF = 0;
+                    }
+                    v[x] += v[y];
+                    break;
+
+                // 8XY5 set vx = vx - vy with carry
+                case 0x5:
+                    if (v[x] < v[y]) {
+                        VF = 0;
+                    } else {
+                        VF = 1;
+                    }
+                    v[x] -= v[y];
+                    break;
+                
+                // 8XY6 right shift vx 
+                case 0x6:
+                    #ifndef USE_SUPER_CHIP_QUIRKS
+                    v[x] = v[y];
+                    #endif
+                    VF = (0x01 & v[x]);
+                    v[x] >>= 1;
+                    break;
+                
+                // 8XY7 set vx = vy - vx with carry
+                case 0x7:
+                    if (v[y] < v[x]) {
+                        VF = 0;
+                    } else {
+                        VF = 1;
+                    }
+                    v[x] = v[y] - v[x];
+                    break;
+                
+                // 8XYE right shift vx 
+                case 0xE:
+                    #ifndef USE_SUPER_CHIP_QUIRKS
+                    v[x] = v[y];
+                    #endif
+                    VF = (0x80 & v[x]);
+                    v[x] <<= 1;
+                    break;
+            }
+            break;
+
+        // 9XY0 skip if vx != vy
+        case 0x9:
+            if (v[x] != v[y]) {
+                PC += 2;
+            }
+            break;
 
         // ANNN set index reg I
         case 0xA:
-        I = nnn;
-        break;
+            I = nnn;
+            break;
+
+        // BNNN jump with offset
+        case 0xB:
+            #ifndef USE_SUPER_CHIP_QUIRKS
+            PC = v[0] + nnn;
+            #else
+            PC = v[x] + nnn;
+            #endif
+            break;
+        
+        // CXNN set vx to random & nn
+        case 0xC:
+            uint8_t r = (uint8_t)rand();
+            v[x] = r & nn;
+            break;
 
         // DXYN draw to screen
         case 0xD:
-        uint8_t cx = v[x] % DISPLAY_WIDTH;
-        uint8_t cy = v[y] % DISPLAY_HEIGHT;
-        VF = 0;
-        for (int i = 0; i < n; i++){
-            uint8_t spriteData = memory[I+i];
-            for (int j = 0; j < 8; j++) {
-                if (((spriteData << j) & 0x80)) { // if sprite pixel on
-                    if (gfx[cx + j][cy + i]) { // if screen pixel on
-                        ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 0;
-                        VF = 1;
-                    } else { // if screen pixel is off
-                        ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 1;
+            uint8_t cx = v[x] % DISPLAY_WIDTH;
+            uint8_t cy = v[y] % DISPLAY_HEIGHT;
+            VF = 0;
+            for (int i = 0; i < n; i++){
+                uint8_t spriteData = memory[I+i];
+                for (int j = 0; j < 8; j++) {
+                    if (((spriteData << j) & 0x80)) { // if sprite pixel on
+                        if (gfx[cx + j][cy + i]) { // if screen pixel on
+                            ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 0;
+                            VF = 1;
+                        } else { // if screen pixel is off
+                            ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 1;
+                        }
+
+                    } 
+                    if ((cx + j) > DISPLAY_WIDTH) {
+                        break;
                     }
-
-                } 
-                if ((cx + j) > DISPLAY_WIDTH) {
+                }
+                if ((cy + i) > DISPLAY_HEIGHT) {
+                    break;
+                }
+            }
+            break;
+        
+        case 0xE:
+            if (v[x] > 0x0F){
+                printf("key checked does not exists");
+                quit = true;
+                return;
+            }
+            switch (nn)
+            {
+                // EX9E skip if key corresponding to vx is pressed
+                case 0x9E:
+                    if (keypad[v[x]]){
+                        PC += 2;
+                    }
                 break;
-            }
-            }
-            if ((cy + i) > DISPLAY_HEIGHT) {
-                break;
-            }
-        }
-        break;
 
+                // EXA1 skip if key corresponding to vx is not pressed
+                case 0xA1:
+                 if (!(keypad[v[x]])){
+                        PC += 2;
+                    }
+                break;
+
+            }
+            break;
+        
+        case 0xF:
+            switch (nn)
+            {
+                // FX07 set vx to time in delay timer
+                case 0x07:
+                v[x] = delay_timer;
+                break;
+
+                // FX15 set delay timer to vx
+                case 0x15:
+                delay_timer = v[x];
+                break;
+
+                // FX18 set sound timer to vx
+                case 0x18:
+                sound_timer = v[x];
+                break;
+
+                // FX1E add vx to I
+                case 0x1E:
+                #ifdef USE_SUPER_CHIP_QUIRKS
+                VF = ((I+x) >= 0x1000);
+                #endif
+                I += x;
+                break;
+
+                // FX0A wait for vx keypress and release
+                case 0x0A:
+                static bool lastKeyState = false;
+                if (v[x] > 0x0F){
+                    printf("key does not exist");
+                    quit = true;
+                    return;
+                }
+                if (!(lastKeyState && !((bool)(keypad[x])))) {
+                    lastKeyState = keypad[x];
+                    PC -= 2;
+                } else {
+                    lastKeyState = false;
+                }
+                break;
+
+                // FX29 set I to font character 
+                case 0x29:
+                I = (0x0F & v[x]);
+                break;
+
+                // FX33 convert vx to decimal and save digits at I
+                case 0x33:
+                uint8_t vx = v[x];
+                for (int i = 2; i >= 0; i--){
+                    memory[I+i] = chip8_fontset[vx % 10];
+                    vx /= 10;
+                }
+                break;
+
+                // FX55 save v0 to vx (including vx) to memory
+                case 0x55:
+                memcpy((memory + I), v, x + 1);
+                #ifndef USE_SUPER_CHIP_QUIRKS
+                I += x + 1;
+                #endif
+                break;
+
+                // FX65 read from memory to v0 to vx (including vx) 
+                case 0x56:
+                memcpy(v, (memory + I), x + 1);
+                #ifndef USE_SUPER_CHIP_QUIRKS
+                I += x + 1;
+                #endif
+                break;
+
+            }
+            break;
+        
+            default:
+            break;
 
     }
 
@@ -250,14 +507,14 @@ void handleInput(){
     if (SDL_PollEvent(&windowEvent)) {
         switch(windowEvent.type) {
             case SDL_QUIT:
-            quit = 1;
+            quit = true;
             break;
 
             case SDL_KEYDOWN:
 
             switch (windowEvent.key.keysym.sym)
             {
-                case SDLK_ESCAPE:quit = 1;break;
+                case SDLK_ESCAPE:quit = true;break;
                 // case SDLK_F2:speed -= 1;break;
                 // case SDLK_F3:speed += 1;break;
                 case SDLK_x:keypad[0] = 1;break;
