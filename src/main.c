@@ -6,7 +6,7 @@
 #define USE_SUPER_CHIP_QUIRKS
 #define RAM_SIZE 4096
 #define TIMERS_RATE 60.0
-#define FRAME_RATE 120.0
+#define FRAME_RATE 380.0
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 320
 #define DISPLAY_WIDTH 64
@@ -15,6 +15,7 @@
 #define STACK_SIZE 16
 #define KEYPAD_SIZE 16
 #define VF v[0xF]
+
 
 void init();
 void draw();
@@ -34,7 +35,7 @@ uint8_t v[V_REG_COUNT];
 uint16_t I; 
 uint16_t PC;
 	
-uint8_t gfx[DISPLAY_WIDTH][DISPLAY_HEIGHT];
+uint8_t gfx[DISPLAY_WIDTH * DISPLAY_HEIGHT];
 uint8_t chip8_fontset[80] =
 {
 	0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -327,24 +328,25 @@ void fetchExecute(){
             uint8_t cx = v[x] % DISPLAY_WIDTH;
             uint8_t cy = v[y] % DISPLAY_HEIGHT;
             VF = 0;
+            
             for (int i = 0; i < n; i++){
-                uint8_t spriteData = memory[I+i];
+                uint8_t spriteData = memory[I + i];
+                if ((cy + i) > DISPLAY_HEIGHT) {
+                    break;
+                }
                 for (int j = 0; j < 8; j++) {
-                    if (((spriteData << j) & 0x80)) { // if sprite pixel on
-                        if (gfx[cx + j][cy + i]) { // if screen pixel on
-                            ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 0;
-                            VF = 1;
-                        } else { // if screen pixel is off
-                            ((uint8_t *)gfx)[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 1;
-                        }
-
-                    } 
                     if ((cx + j) > DISPLAY_WIDTH) {
                         break;
                     }
-                }
-                if ((cy + i) > DISPLAY_HEIGHT) {
-                    break;
+                    if (((spriteData << j) & 0x80)) { // if sprite pixel on
+                        if (gfx[cx + j + ((cy + i)*DISPLAY_WIDTH)]) { // if screen pixel on
+                            gfx[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 0;
+                            VF = 1;
+                        } else { // if screen pixel is off
+                            gfx[cx + j + ((cy + i)*DISPLAY_WIDTH)] = 1;
+                        }
+
+                    }
                 }
             }
             break;
@@ -425,7 +427,7 @@ void fetchExecute(){
                 case 0x33:
                 uint8_t vx = v[x];
                 for (int i = 2; i >= 0; i--){
-                    memory[I+i] = chip8_fontset[vx % 10];
+                    memory[I+i] = memory[vx % 10];
                     vx /= 10;
                 }
                 break;
